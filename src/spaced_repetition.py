@@ -11,14 +11,14 @@ FEEDBACK_TO_QUALITY = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class CardScheduleState:
     easiness_factor: float
     interval: int
     repetition_count: int
 
 
-@dataclass(slots=True)
+@dataclass
 class ScheduleUpdate:
     easiness_factor: float
     interval: int

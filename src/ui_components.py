@@ -154,6 +154,26 @@ def render_stats(snapshot: dict[str, Any]) -> None:
     )
 
 
+def render_session_history(events: list[dict[str, Any]]) -> None:
+    st.sidebar.subheader("Session")
+    if not events:
+        st.sidebar.caption("No interactions yet.")
+        return
+
+    recent = events[-12:]
+    for event in reversed(recent):
+        stamp = event.get("at", "")
+        action = str(event.get("action", "event")).replace("_", " ").title()
+        title = event.get("title", "")
+        detail = event.get("detail", "")
+        if title:
+            st.sidebar.caption(f"{stamp} • {action}: {title}")
+        else:
+            st.sidebar.caption(f"{stamp} • {action}")
+        if detail:
+            st.sidebar.caption(detail)
+
+
 def render_card(card: dict[str, Any]) -> str | None:
     st.markdown('<div class="rev-card">', unsafe_allow_html=True)
     icon = card.get("icon", "") or "📝"

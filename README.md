@@ -1,10 +1,11 @@
 # Revision IA
 
-Revision IA is a production-ready Streamlit web app that turns any topic into a social-style learning feed powered by AI generation and spaced repetition.
+Revision IA is a production-ready Streamlit web app that turns any topic into a social-style learning feed powered by Wikipedia web scraping, AI-assisted enrichment, and spaced repetition.
 
 ## What It Does
 
 - Takes a user topic (for example: planes, Roman Empire, quantum physics)
+- Scrapes Wikipedia for the topic (for example: /wiki/Cars), extracts structured knowledge, and turns it into learning cards
 - Generates atomic micro-learning cards (definitions, concepts, facts, comparisons, examples)
 - Displays cards in a vertical feed with fast interactions
 - Captures feedback: easy, medium, hard
@@ -16,7 +17,8 @@ Revision IA is a production-ready Streamlit web app that turns any topic into a 
 
 app.py  -> main Streamlit application
 src/
-	content_generator.py  -> topic to micro-content generation (OpenAI + local fallback)
+	content_generator.py  -> Wikipedia-first card generation (optional OpenAI enrichment)
+	wiki_scraper.py       -> direct Wikipedia HTML scraping and parsing
 	feed_engine.py        -> feed retrieval and feedback orchestration
 	spaced_repetition.py  -> SM-2 scheduling implementation
 	storage.py            -> SQLite persistence and analytics queries
@@ -39,7 +41,7 @@ set OPENAI_API_KEY=your_key_here
 set OPENAI_MODEL=gpt-4.1-mini
 ```
 
-If no key is set, the app automatically uses a local fallback generator.
+If no key is set, the app still works with Wikipedia-based generation and uses local fallback cards only when scraping fails.
 
 4. Run the app:
 
@@ -71,7 +73,20 @@ Main tables:
 
 The database is created automatically on first launch.
 
+## Feed Pagination and Session History
+
+- The feed uses cursor-based pagination across three lanes (due, new, top-up reviewed).
+- Cursors and served card IDs are kept in session state to provide stable infinite pagination.
+- Session history tracks topic activation, card loading, submitted reviews, feed resets, and exhaustion events.
+
+## Run Tests
+
+```bash
+pytest -q
+```
+
 ## Notes
 
 - The feed prioritizes due cards, then unseen cards, then older reviewed cards to keep the stream active.
 - UI is optimized for both desktop and mobile with a dark-friendly design.
+- Content generation now uses Wikipedia scraping as the primary knowledge source to keep cards grounded in real topic data.

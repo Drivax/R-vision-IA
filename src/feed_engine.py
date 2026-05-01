@@ -8,7 +8,7 @@ from src.storage import Storage
 from src.utils import utc_today
 
 
-@dataclass(slots=True)
+@dataclass
 class ReviewResult:
     label: str
     quality: int
@@ -26,13 +26,13 @@ class FeedEngine:
     def get_next_batch(
         self,
         topic_id: int,
-        shown_ids: list[int],
+        pagination_state: dict[str, Any],
         batch_size: int = 8,
-    ) -> list[dict[str, Any]]:
-        return self.storage.fetch_feed_batch(
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        return self.storage.fetch_feed_page(
             topic_id=topic_id,
-            shown_ids=shown_ids,
             batch_size=batch_size,
+            pagination_state=pagination_state,
             today=utc_today(),
         )
 

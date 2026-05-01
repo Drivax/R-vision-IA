@@ -13,9 +13,11 @@ from src.ui_components import (
     render_card,
     render_empty_feed,
     render_hero,
+    render_session_history,
     render_stats,
     render_topic_controls,
 )
+from src.utils import utc_now
 
 
 SEED_CARDS_PER_TOPIC = 24
@@ -27,6 +29,14 @@ def _ensure_state() -> None:
         "topic_name": "",
         "topic_id": None,
         "feed_cards": [],
+        "feed_card_ids": set(),
+        "pagination_state": {
+            "due_cursor": {"next_review_date": None, "repetition_count": 0, "id": 0},
+            "new_cursor": {"id": 0},
+            "top_up_cursor": {"sort_value": None, "id": 0},
+            "served_ids": [],
+        },
+        "session_events": [],
         "last_feedback": "",
     }
     for key, value in defaults.items():
@@ -62,21 +72,52 @@ def _seed_topic_cards(topic_id: int, topic_name: str, storage: Storage) -> int:
     return storage.add_cards(topic_id=topic_id, cards=cards)
 
 
-def _load_next_batch(storage: Storage, engine: FeedEngine, topic_id: int) -> None:
-    shown_ids = [int(card["id"]) for card in st.session_state.feed_cards]
-    batch = engine.get_next_batch(topic_id=topic_id, shown_ids=shown_ids, batch_size=BATCH_SIZE)
+def _append_event(action: str, title: str = "", detail: str = "") -> None:
+    st.session_state.session_events.append(
+        {
+            "at": utc_now().strftime("%H:%M:%S"),
+            "action": action,
+            "title": title,
+            "detail": detail,
+        }
+    )
+
+
+def _reset_topic_feed_state() -> None:
+    st.session_state.feed_cards = []
+    st.session_state.feed_card_ids = set()
+    st.session_state.pagination_state = {
+        "due_cursor": {"next_review_date": None, "repetition_count": 0, "id": 0},
+        "new_cursor": {"id": 0},
+        "top_up_cursor": {"sort_value": None, "id": 0},
+        "served_ids": [],
+    }
+
+
+def _load_next_batch(engine: FeedEngine, topic_id: int) -> None:
+    batch, next_state = engine.get_next_batch(
+        topic_id=topic_id,
+        pagination_state=st.session_state.pagination_state,
+        batch_size=BATCH_SIZE,
+    )
+    st.session_state.pagination_state = next_state
     if batch:
-        st.session_state.feed_cards.extend(batch)
+        new_cards = [card for card in batch if int(card["id"]) not in st.session_state.feed_card_ids]
+        st.session_state.feed_cards.extend(new_cards)
+        for card in new_cards:
+            st.session_state.feed_card_ids.add(int(card["id"]))
+            _append_event(action="card_loaded", title=card["title"], detail=card["card_type"])
 
 
 def _activate_topic(storage: Storage, engine: FeedEngine, topic_name: str) -> None:
     topic = storage.get_or_create_topic(topic_name)
     st.session_state.topic_name = topic["name"]
     st.session_state.topic_id = topic["id"]
-    st.session_state.feed_cards = []
+    _reset_topic_feed_state()
+    _append_event(action="topic_activated", title=topic["name"])
 
     inserted = _seed_topic_cards(topic_id=topic["id"], topic_name=topic["name"], storage=storage)
-    _load_next_batch(storage=storage, engine=engine, topic_id=topic["id"])
+    _load_next_batch(engine=engine, topic_id=topic["id"])
 
     if inserted:
         st.success(f"Generated {inserted} new learning cards for {topic['name']}.")
@@ -86,6 +127,11 @@ def _handle_feedback(engine: FeedEngine, card: dict) -> None:
     result = engine.apply_feedback(card=card, feedback_label=st.session_state[f"feedback_{card['id']}"])
     st.session_state.last_feedback = (
         f"Saved: {result.label.title()} • next review in {result.interval} day(s) ({result.next_review_date})."
+    )
+    _append_event(
+        action="review_submitted",
+        title=card["title"],
+        detail=f"{result.label} -> next {result.next_review_date} ({result.interval}d)",
     )
 
 
@@ -111,6 +157,7 @@ def main() -> None:
 
     snapshot = storage.get_progress_snapshot(topic_id=st.session_state.topic_id)
     render_stats(snapshot)
+    render_session_history(st.session_state.session_events)
 
     if st.session_state.last_feedback:
         st.info(st.session_state.last_feedback)
@@ -120,7 +167,7 @@ def main() -> None:
         return
 
     if not st.session_state.feed_cards:
-        _load_next_batch(storage=storage, engine=engine, topic_id=st.session_state.topic_id)
+        _load_next_batch(engine=engine, topic_id=st.session_state.topic_id)
 
     feedback_events: list[tuple[int, str]] = []
 
@@ -131,22 +178,31 @@ def main() -> None:
 
     if feedback_events:
         card_map = {card["id"]: card for card in st.session_state.feed_cards}
+        reviewed_ids: set[int] = set()
         for card_id, feedback in feedback_events:
             st.session_state[f"feedback_{card_id}"] = feedback
             _handle_feedback(engine=engine, card=card_map[card_id])
+            reviewed_ids.add(int(card_id))
+
+        if reviewed_ids:
+            st.session_state.feed_cards = [
+                card for card in st.session_state.feed_cards if int(card["id"]) not in reviewed_ids
+            ]
         st.rerun()
 
     col_a, col_b = st.columns([2, 5])
     if col_a.button("Load more", use_container_width=True):
         before = len(st.session_state.feed_cards)
-        _load_next_batch(storage=storage, engine=engine, topic_id=st.session_state.topic_id)
+        _load_next_batch(engine=engine, topic_id=st.session_state.topic_id)
         after = len(st.session_state.feed_cards)
         if after == before:
             render_empty_feed()
+            _append_event(action="feed_exhausted", detail="No additional cards for this session window")
 
     if col_b.button("Refresh due cards", use_container_width=True):
-        st.session_state.feed_cards = []
-        _load_next_batch(storage=storage, engine=engine, topic_id=st.session_state.topic_id)
+        _reset_topic_feed_state()
+        _append_event(action="feed_reset", detail="Feed cursors reset to prioritize due cards")
+        _load_next_batch(engine=engine, topic_id=st.session_state.topic_id)
         st.rerun()
 
 

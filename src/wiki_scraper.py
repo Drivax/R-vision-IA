@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+from typing import Any
+from urllib.parse import quote
+
+import requests
+from bs4 import BeautifulSoup
+
+
+def _clean_text(value: str) -> str:
+    no_refs = re.sub(r"\[[^\]]+\]", "", value)
+    compact = re.sub(r"\s+", " ", no_refs).strip()
+    return compact
+
+
+@dataclass
+class WikiTopicData:
+    title: str
+    url: str
+    summary: str
+    paragraphs: list[str]
+    key_facts: list[tuple[str, str]]
+    sections: list[tuple[str, str]]
+    highlights: list[str]
+
+
+class WikipediaScraper:
+    """Fetch and parse topic information directly from Wikipedia pages."""
+
+    BASE_URL = "https://en.wikipedia.org"
+
+    def __init__(self, timeout: int = 10) -> None:
+        self.timeout = timeout
+
+    def scrape_topic(self, topic: str) -> WikiTopicData | None:
+        topic = topic.strip()
+        if not topic:
+            return None
+
+        candidates = [
+            f"{self.BASE_URL}/wiki/{quote(topic.replace(' ', '_'))}",
+            f"{self.BASE_URL}/wiki/{quote(topic.title().replace(' ', '_'))}",
+            f"{self.BASE_URL}/wiki/{quote(topic.lower().replace(' ', '_'))}",
+        ]
+
+        visited: set[str] = set()
+        for url in candidates:
+            if url in visited:
+                continue
+            visited.add(url)
+            data = self._fetch_and_parse(url)
+            if data:
+                return data
+        return None
+
+    def _fetch_and_parse(self, url: str) -> WikiTopicData | None:
+        try:
+            response = requests.get(
+                url,
+                timeout=self.timeout,
+                headers={
+                    "User-Agent": "RevisionIA/1.0 (educational project)",
+                    "Accept-Language": "en",
+                },
+            )
+        except requests.RequestException:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        # Wikipedia redirects aliases (e.g., Car -> Automobile), which is expected.
+        final_url = response.url
+        if "/wiki/" not in final_url:
+            return None
+
+        return self._parse_topic_html(html=response.text, url=final_url)
+
+    def _parse_topic_html(self, html: str, url: str) -> WikiTopicData | None:
+        soup = BeautifulSoup(html, "html.parser")
+
+        title_node = soup.select_one("#firstHeading")
+        if not title_node:
+            return None
+        title = _clean_text(title_node.get_text(" ", strip=True))
+
+        content = soup.select_one("div#mw-content-text")
+        if not content:
+            return None
+
+        paragraphs: list[str] = []
+        for p in content.select("div.mw-parser-output > p"):
+            text = _clean_text(p.get_text(" ", strip=True))
+            if len(text) < 60:
+                continue
+            paragraphs.append(text)
+            if len(paragraphs) >= 6:
+                break
+
+        summary = paragraphs[0] if paragraphs else ""
+
+        key_facts: list[tuple[str, str]] = []
+        infobox = soup.select_one("table.infobox")
+        if infobox:
+            for row in infobox.select("tr"):
+                key = row.select_one("th")
+                value = row.select_one("td")
+                if not key or not value:
+                    continue
+                k_text = _clean_text(key.get_text(" ", strip=True))
+                v_text = _clean_text(value.get_text(" ", strip=True))
+                if not k_text or not v_text:
+                    continue
+                if len(v_text) > 220:
+                    v_text = v_text[:217].rstrip() + "..."
+                key_facts.append((k_text, v_text))
+                if len(key_facts) >= 10:
+                    break
+
+        sections: list[tuple[str, str]] = []
+        for h in content.select("div.mw-parser-output > h2, div.mw-parser-output > h3"):
+            heading_text = _clean_text(h.get_text(" ", strip=True))
+            if not heading_text or heading_text.lower() in {"references", "external links", "see also"}:
+                continue
+
+            body_text = ""
+            sibling = h.find_next_sibling()
+            while sibling is not None and sibling.name not in {"h2", "h3"}:
+                if sibling.name == "p":
+                    maybe_text = _clean_text(sibling.get_text(" ", strip=True))
+                    if len(maybe_text) >= 60:
+                        body_text = maybe_text
+                        break
+                sibling = sibling.find_next_sibling()
+
+            if body_text:
+                sections.append((heading_text, body_text))
+            if len(sections) >= 8:
+                break
+
+        highlights: list[str] = []
+        for li in content.select("div.mw-parser-output > ul > li"):
+            text = _clean_text(li.get_text(" ", strip=True))
+            if len(text) < 50:
+                continue
+            if len(text) > 220:
+                text = text[:217].rstrip() + "..."
+            highlights.append(text)
+            if len(highlights) >= 10:
+                break
+
+        if not summary and not key_facts and not sections and not highlights:
+            return None
+
+        return WikiTopicData(
+            title=title,
+            url=url,
+            summary=summary,
+            paragraphs=paragraphs,
+            key_facts=key_facts,
+            sections=sections,
+            highlights=highlights,
+        )

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 import sqlite3
@@ -215,6 +214,165 @@ class Storage:
             ).fetchall()
 
             return [dict(row) for row in [*due_rows, *new_rows, *top_up_rows]]
+
+    def fetch_feed_page(
+        self,
+        topic_id: int,
+        batch_size: int,
+        pagination_state: dict[str, Any] | None = None,
+        today: date | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Return a stable feed page using keyset-like cursors per card lane.
+
+        The feed is assembled in three lanes, in this order:
+        1) due cards, 2) unseen cards, 3) reviewed top-up cards.
+        """
+        check_date = today or utc_today()
+        state = pagination_state or {}
+        served_ids = set(state.get("served_ids", []))
+        due_limit = max(1, int(batch_size * 0.7))
+
+        due_cursor = state.get("due_cursor") or {
+            "next_review_date": None,
+            "repetition_count": 0,
+            "id": 0,
+        }
+        new_cursor = state.get("new_cursor") or {"id": 0}
+        top_up_cursor = state.get("top_up_cursor") or {
+            "sort_value": None,
+            "id": 0,
+        }
+
+        with self._connect() as conn:
+            due_rows = conn.execute(
+                """
+                SELECT * FROM cards
+                WHERE topic_id = ?
+                    AND next_review_date IS NOT NULL
+                    AND date(next_review_date) <= date(?)
+                    AND (
+                        ? IS NULL
+                        OR date(next_review_date) > date(?)
+                        OR (
+                            date(next_review_date) = date(?)
+                            AND (
+                                repetition_count > ?
+                                OR (repetition_count = ? AND id > ?)
+                            )
+                        )
+                    )
+                ORDER BY date(next_review_date) ASC, repetition_count ASC, id ASC
+                LIMIT ?
+                """,
+                (
+                    topic_id,
+                    to_iso_date(check_date),
+                    due_cursor.get("next_review_date"),
+                    due_cursor.get("next_review_date"),
+                    due_cursor.get("next_review_date"),
+                    int(due_cursor.get("repetition_count", 0)),
+                    int(due_cursor.get("repetition_count", 0)),
+                    int(due_cursor.get("id", 0)),
+                    due_limit,
+                ),
+            ).fetchall()
+
+            due_cards = [dict(row) for row in due_rows if int(row["id"]) not in served_ids]
+
+            if due_cards:
+                last_due = due_cards[-1]
+                due_cursor = {
+                    "next_review_date": last_due["next_review_date"],
+                    "repetition_count": int(last_due["repetition_count"]),
+                    "id": int(last_due["id"]),
+                }
+
+            remaining = batch_size - len(due_cards)
+            if remaining <= 0:
+                cards = due_cards
+                new_state = {
+                    "due_cursor": due_cursor,
+                    "new_cursor": new_cursor,
+                    "top_up_cursor": top_up_cursor,
+                    "served_ids": [*served_ids, *[int(card["id"]) for card in cards]],
+                }
+                return cards, new_state
+
+            new_rows = conn.execute(
+                """
+                SELECT * FROM cards
+                WHERE topic_id = ?
+                    AND seen_count = 0
+                    AND id > ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (topic_id, int(new_cursor.get("id", 0)), remaining * 2),
+            ).fetchall()
+
+            new_cards = [dict(row) for row in new_rows if int(row["id"]) not in served_ids][:remaining]
+            if new_cards:
+                new_cursor = {"id": int(new_cards[-1]["id"])}
+
+            remaining -= len(new_cards)
+            if remaining <= 0:
+                cards = [*due_cards, *new_cards]
+                new_state = {
+                    "due_cursor": due_cursor,
+                    "new_cursor": new_cursor,
+                    "top_up_cursor": top_up_cursor,
+                    "served_ids": [*served_ids, *[int(card["id"]) for card in cards]],
+                }
+                return cards, new_state
+
+            top_up_rows = conn.execute(
+                """
+                SELECT *, COALESCE(last_reviewed_at, created_at) AS sort_value
+                FROM cards
+                WHERE topic_id = ?
+                    AND seen_count > 0
+                    AND (
+                        next_review_date IS NULL
+                        OR date(next_review_date) > date(?)
+                    )
+                    AND (
+                        ? IS NULL
+                        OR COALESCE(last_reviewed_at, created_at) > ?
+                        OR (
+                            COALESCE(last_reviewed_at, created_at) = ?
+                            AND id > ?
+                        )
+                    )
+                ORDER BY sort_value ASC, id ASC
+                LIMIT ?
+                """,
+                (
+                    topic_id,
+                    to_iso_date(check_date),
+                    top_up_cursor.get("sort_value"),
+                    top_up_cursor.get("sort_value"),
+                    top_up_cursor.get("sort_value"),
+                    int(top_up_cursor.get("id", 0)),
+                    remaining * 2,
+                ),
+            ).fetchall()
+
+            top_up_cards = [dict(row) for row in top_up_rows if int(row["id"]) not in served_ids][:remaining]
+            if top_up_cards:
+                last_top = top_up_cards[-1]
+                top_up_cursor = {
+                    "sort_value": last_top["sort_value"],
+                    "id": int(last_top["id"]),
+                }
+
+            cards = [*due_cards, *new_cards, *top_up_cards]
+            new_state = {
+                "due_cursor": due_cursor,
+                "new_cursor": new_cursor,
+                "top_up_cursor": top_up_cursor,
+                "served_ids": [*served_ids, *[int(card["id"]) for card in cards]],
+            }
+            return cards, new_state
 
     def record_review(
         self,
