@@ -51,7 +51,7 @@ def get_storage() -> Storage:
 
 @st.cache_resource
 def get_content_generator() -> ContentGenerator:
-    return ContentGenerator()
+    return ContentGenerator(storage=get_storage())
 
 
 @st.cache_resource

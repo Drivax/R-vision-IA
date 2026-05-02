@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
+import json
 from pathlib import Path
 import sqlite3
-from typing import Any
+from typing import Any, Optional
 
 from src.spaced_repetition import ScheduleUpdate
 from src.utils import normalize_topic, stable_hash, to_iso_date, utc_now, utc_today
+
+WIKI_CACHE_TTL_DAYS = 7
 
 
 class Storage:
@@ -69,6 +72,18 @@ class Storage:
                     new_repetition_count INTEGER NOT NULL,
                     next_review_date TEXT NOT NULL,
                     FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS wiki_cache (
+                    normalized_topic TEXT PRIMARY KEY,
+                    wiki_title TEXT NOT NULL,
+                    wiki_url TEXT NOT NULL,
+                    summary TEXT,
+                    paragraphs_json TEXT,
+                    key_facts_json TEXT,
+                    sections_json TEXT,
+                    highlights_json TEXT,
+                    cached_at TEXT NOT NULL
                 );
                 """
             )
@@ -499,3 +514,69 @@ class Storage:
                 "retention_score": retention_score,
                 "avg_quality_today": round(avg_quality, 2),
             }
+
+    # ------------------------------------------------------------------
+    # Wikipedia cache
+    # ------------------------------------------------------------------
+
+    def get_wiki_cache(self, normalized_topic: str):
+        """Return cached WikiTopicData for *normalized_topic* or None if absent/stale."""
+        from src.wiki_scraper import WikiTopicData  # local import to avoid circular
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM wiki_cache WHERE normalized_topic = ?",
+                [normalized_topic],
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        cached_at = datetime.fromisoformat(row["cached_at"])
+        age = datetime.now(timezone.utc) - cached_at.replace(tzinfo=timezone.utc)
+        if age.days >= WIKI_CACHE_TTL_DAYS:
+            return None
+
+        return WikiTopicData(
+            title=row["wiki_title"],
+            url=row["wiki_url"],
+            summary=row["summary"] or "",
+            paragraphs=json.loads(row["paragraphs_json"] or "[]"),
+            key_facts=[tuple(x) for x in json.loads(row["key_facts_json"] or "[]")],
+            sections=[tuple(x) for x in json.loads(row["sections_json"] or "[]")],
+            highlights=json.loads(row["highlights_json"] or "[]"),
+        )
+
+    def set_wiki_cache(self, normalized_topic: str, data) -> None:
+        """Persist a WikiTopicData result to the cache table."""
+        now = utc_now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO wiki_cache
+                    (normalized_topic, wiki_title, wiki_url, summary,
+                     paragraphs_json, key_facts_json, sections_json,
+                     highlights_json, cached_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(normalized_topic) DO UPDATE SET
+                    wiki_title = excluded.wiki_title,
+                    wiki_url = excluded.wiki_url,
+                    summary = excluded.summary,
+                    paragraphs_json = excluded.paragraphs_json,
+                    key_facts_json = excluded.key_facts_json,
+                    sections_json = excluded.sections_json,
+                    highlights_json = excluded.highlights_json,
+                    cached_at = excluded.cached_at
+                """,
+                [
+                    normalized_topic,
+                    data.title,
+                    data.url,
+                    data.summary,
+                    json.dumps(data.paragraphs),
+                    json.dumps(data.key_facts),
+                    json.dumps(data.sections),
+                    json.dumps(data.highlights),
+                    now,
+                ],
+            )

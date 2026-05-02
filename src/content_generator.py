@@ -27,9 +27,9 @@ class LearningCard:
 class ContentGenerator:
     """Generate short-form learning cards with Wikipedia scraping as source of truth."""
 
-    def __init__(self) -> None:
+    def __init__(self, storage=None) -> None:
         self._openai_client = None
-        self._wiki = WikipediaScraper()
+        self._wiki = WikipediaScraper(storage=storage)
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key and OpenAI:
             self._openai_client = OpenAI(api_key=api_key)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote
 
 import requests
@@ -27,17 +27,31 @@ class WikiTopicData:
 
 
 class WikipediaScraper:
-    """Fetch and parse topic information directly from Wikipedia pages."""
+    """Fetch and parse topic information directly from English Wikipedia pages.
+
+    Only en.wikipedia.org is supported; redirects to other language editions
+    are rejected.  Scraped results are cached in SQLite via an optional
+    Storage instance to avoid repeated HTTP requests for the same topic.
+    """
 
     BASE_URL = "https://en.wikipedia.org"
 
-    def __init__(self, timeout: int = 10) -> None:
+    def __init__(self, timeout: int = 10, storage=None) -> None:
         self.timeout = timeout
+        self._storage = storage  # optional src.storage.Storage instance
 
-    def scrape_topic(self, topic: str) -> WikiTopicData | None:
+    def scrape_topic(self, topic: str) -> Optional[WikiTopicData]:
         topic = topic.strip()
         if not topic:
             return None
+
+        # --- cache lookup ---
+        if self._storage is not None:
+            from src.utils import normalize_topic
+            normalized = normalize_topic(topic)
+            cached = self._storage.get_wiki_cache(normalized)
+            if cached is not None:
+                return cached
 
         candidates = [
             f"{self.BASE_URL}/wiki/{quote(topic.replace(' ', '_'))}",
@@ -52,6 +66,10 @@ class WikipediaScraper:
             visited.add(url)
             data = self._fetch_and_parse(url)
             if data:
+                # --- cache store ---
+                if self._storage is not None:
+                    from src.utils import normalize_topic
+                    self._storage.set_wiki_cache(normalize_topic(topic), data)
                 return data
         return None
 
@@ -72,8 +90,9 @@ class WikipediaScraper:
             return None
 
         # Wikipedia redirects aliases (e.g., Car -> Automobile), which is expected.
+        # However we reject redirects to other language editions.
         final_url = response.url
-        if "/wiki/" not in final_url:
+        if "en.wikipedia.org" not in final_url or "/wiki/" not in final_url:
             return None
 
         return self._parse_topic_html(html=response.text, url=final_url)
