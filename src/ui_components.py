@@ -182,6 +182,11 @@ def render_card(card: dict[str, Any]) -> str | None:
         unsafe_allow_html=True,
     )
     st.subheader(card["title"])
+
+    image_url = card.get("image_url") or ""
+    if image_url:
+        st.image(image_url, use_container_width=True)
+
     st.write(card["body"])
 
     badges = []

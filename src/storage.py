@@ -19,6 +19,7 @@ class Storage:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+        self._run_migrations()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -54,6 +55,7 @@ class Storage:
                     last_reviewed_at TEXT,
                     is_mastered INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
+                    image_url TEXT,
                     UNIQUE(topic_id, content_hash),
                     FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
                 );
@@ -87,6 +89,19 @@ class Storage:
                 );
                 """
             )
+
+    def _run_migrations(self) -> None:
+        """Add columns introduced after initial schema creation (idempotent)."""
+        new_columns = [
+            ("cards", "image_url", "TEXT"),
+            ("wiki_cache", "image_url", "TEXT"),
+        ]
+        with self._connect() as conn:
+            for table, column, col_type in new_columns:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
 
     def get_or_create_topic(self, topic_name: str) -> dict[str, Any]:
         normalized = normalize_topic(topic_name)
@@ -140,8 +155,8 @@ class Storage:
                     conn.execute(
                         """
                         INSERT INTO cards (
-                            topic_id, title, body, card_type, icon, content_hash, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            topic_id, title, body, card_type, icon, content_hash, image_url, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             topic_id,
@@ -150,6 +165,7 @@ class Storage:
                             card.get("card_type", "concept"),
                             card.get("icon", ""),
                             digest,
+                            card.get("image_url") or None,
                             now,
                         ),
                     )
@@ -545,6 +561,7 @@ class Storage:
             key_facts=[tuple(x) for x in json.loads(row["key_facts_json"] or "[]")],
             sections=[tuple(x) for x in json.loads(row["sections_json"] or "[]")],
             highlights=json.loads(row["highlights_json"] or "[]"),
+            image_url=row["image_url"] if row["image_url"] else None,
         )
 
     def set_wiki_cache(self, normalized_topic: str, data) -> None:
@@ -556,8 +573,8 @@ class Storage:
                 INSERT INTO wiki_cache
                     (normalized_topic, wiki_title, wiki_url, summary,
                      paragraphs_json, key_facts_json, sections_json,
-                     highlights_json, cached_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     highlights_json, image_url, cached_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(normalized_topic) DO UPDATE SET
                     wiki_title = excluded.wiki_title,
                     wiki_url = excluded.wiki_url,
@@ -566,6 +583,7 @@ class Storage:
                     key_facts_json = excluded.key_facts_json,
                     sections_json = excluded.sections_json,
                     highlights_json = excluded.highlights_json,
+                    image_url = excluded.image_url,
                     cached_at = excluded.cached_at
                 """,
                 [
@@ -577,6 +595,7 @@ class Storage:
                     json.dumps(data.key_facts),
                     json.dumps(data.sections),
                     json.dumps(data.highlights),
+                    data.image_url,
                     now,
                 ],
             )

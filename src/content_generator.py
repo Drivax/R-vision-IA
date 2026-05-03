@@ -9,6 +9,7 @@ from typing import Any
 
 from src.utils import normalize_topic
 from src.wiki_scraper import WikiTopicData, WikipediaScraper
+from typing import Optional
 
 try:
     from openai import OpenAI
@@ -22,6 +23,7 @@ class LearningCard:
     body: str
     card_type: str
     icon: str
+    image_url: Optional[str] = None
 
 
 class ContentGenerator:
@@ -67,6 +69,7 @@ class ContentGenerator:
                     body=self._truncate(wiki_topic.summary),
                     card_type="definition",
                     icon="📘",
+                    image_url=wiki_topic.image_url,
                 )
             )
 

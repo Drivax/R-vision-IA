@@ -15,6 +15,15 @@ def _clean_text(value: str) -> str:
     return compact
 
 
+def _make_https(src: str) -> str:
+    """Normalise a relative or protocol-relative image URL to https://."""
+    if src.startswith("//"):
+        return "https:" + src
+    if src.startswith("/"):
+        return "https://en.wikipedia.org" + src
+    return src
+
+
 @dataclass
 class WikiTopicData:
     title: str
@@ -24,6 +33,7 @@ class WikiTopicData:
     key_facts: list[tuple[str, str]]
     sections: list[tuple[str, str]]
     highlights: list[str]
+    image_url: Optional[str] = None
 
 
 class WikipediaScraper:
@@ -173,6 +183,8 @@ class WikipediaScraper:
         if not summary and not key_facts and not sections and not highlights:
             return None
 
+        image_url = self._extract_main_image(soup, content)
+
         return WikiTopicData(
             title=title,
             url=url,
@@ -181,4 +193,31 @@ class WikipediaScraper:
             key_facts=key_facts,
             sections=sections,
             highlights=highlights,
+            image_url=image_url,
         )
+
+    def _extract_main_image(self, soup: BeautifulSoup, content: Any) -> Optional[str]:
+        """Return an absolute HTTPS URL for the main article image, or None."""
+        candidates = [
+            # 1. Infobox image (most reliable for articles with infoboxes)
+            soup.select_one("table.infobox img"),
+            # 2. First figure image in article body
+            content.select_one("figure img"),
+            # 3. Any first image in the parser output
+            content.select_one("div.mw-parser-output img"),
+        ]
+        for img in candidates:
+            if img is None:
+                continue
+            src = img.get("src", "") or ""
+            if not src or "Special:" in src:
+                continue
+            # Skip tiny icons / flags (width <= 30)
+            try:
+                width = int(img.get("width", 0) or 0)
+                if 0 < width <= 30:
+                    continue
+            except (ValueError, TypeError):
+                pass
+            return _make_https(src)
+        return None
