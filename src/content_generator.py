@@ -58,6 +58,29 @@ class ContentGenerator:
                 return cards
         return self._generate_fallback(topic=topic, count=count)
 
+    def suggest_related_subjects(self, topic: str, limit: int = 6) -> list[str]:
+        wiki_topic = self._wiki.scrape_topic(topic)
+        if not wiki_topic:
+            return []
+
+        suggestions: list[str] = []
+        seen: set[str] = set()
+        for related in wiki_topic.related_topics:
+            cleaned = related.strip()
+            if not cleaned:
+                continue
+
+            normalized = cleaned.casefold()
+            if normalized in seen or normalized == wiki_topic.title.casefold():
+                continue
+
+            seen.add(normalized)
+            suggestions.append(cleaned)
+            if len(suggestions) >= max(1, limit):
+                break
+
+        return suggestions
+
     def _generate_from_wikipedia(self, wiki_topic: WikiTopicData, count: int) -> list[dict[str, str]]:
         cards: list[LearningCard] = []
         topic_title = wiki_topic.title

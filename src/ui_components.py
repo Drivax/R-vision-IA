@@ -101,6 +101,18 @@ def inject_styles() -> None:
                 border: 1px solid #2f4f71;
                 font-family: "Manrope", sans-serif;
                 font-weight: 600;
+                color: #eaf3ff !important;
+                background: linear-gradient(180deg, #274666 0%, #1c3550 100%);
+            }
+
+            .stButton > button:hover {
+                border-color: #3b648d;
+                background: linear-gradient(180deg, #2e5278 0%, #1f3e5d 100%);
+            }
+
+            .stButton > button[kind="primary"] {
+                border-color: #1a8f70;
+                background: linear-gradient(180deg, #24b78e 0%, #19856a 100%);
             }
         </style>
         """,
@@ -221,3 +233,20 @@ def render_empty_feed() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_related_subject_buttons(subjects: list[str], key_prefix: str = "related") -> str | None:
+    if not subjects:
+        return None
+
+    st.markdown("### Explore a related subject")
+    st.caption("Suggestions come from the article related section on Wikipedia.")
+
+    selected: str | None = None
+    cols = st.columns(3)
+    for idx, subject in enumerate(subjects):
+        col = cols[idx % 3]
+        if col.button(subject, key=f"{key_prefix}_{idx}", use_container_width=True):
+            selected = subject
+
+    return selected

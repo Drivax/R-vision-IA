@@ -13,6 +13,7 @@ from src.ui_components import (
     render_card,
     render_empty_feed,
     render_hero,
+    render_related_subject_buttons,
     render_session_history,
     render_stats,
     render_topic_controls,
@@ -38,6 +39,7 @@ def _ensure_state() -> None:
         },
         "session_events": [],
         "last_feedback": "",
+        "related_subjects": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -117,6 +119,7 @@ def _activate_topic(storage: Storage, engine: FeedEngine, topic_name: str) -> No
     _append_event(action="topic_activated", title=topic["name"])
 
     inserted = _seed_topic_cards(topic_id=topic["id"], topic_name=topic["name"], storage=storage)
+    st.session_state.related_subjects = get_content_generator().suggest_related_subjects(topic=topic["name"], limit=6)
     _load_next_batch(engine=engine, topic_id=topic["id"])
 
     if inserted:
@@ -170,8 +173,11 @@ def main() -> None:
         _load_next_batch(engine=engine, topic_id=st.session_state.topic_id)
 
     feedback_events: list[tuple[int, str]] = []
+    has_example_cards = False
 
     for card in st.session_state.feed_cards:
+        if str(card.get("card_type", "")).lower() == "example":
+            has_example_cards = True
         feedback = render_card(card)
         if feedback:
             feedback_events.append((card["id"], feedback))
@@ -189,6 +195,16 @@ def main() -> None:
                 card for card in st.session_state.feed_cards if int(card["id"]) not in reviewed_ids
             ]
         st.rerun()
+
+    if has_example_cards and st.session_state.related_subjects:
+        related_selection = render_related_subject_buttons(
+            subjects=st.session_state.related_subjects,
+            key_prefix=f"related_{st.session_state.topic_id}",
+        )
+        if related_selection:
+            _append_event(action="related_subject_selected", title=related_selection)
+            _activate_topic(storage=storage, engine=engine, topic_name=related_selection)
+            st.rerun()
 
     col_a, col_b = st.columns([2, 5])
     if col_a.button("Load more", use_container_width=True):

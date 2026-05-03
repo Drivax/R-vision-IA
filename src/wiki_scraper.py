@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Any, Optional
 from urllib.parse import quote
@@ -34,6 +34,7 @@ class WikiTopicData:
     sections: list[tuple[str, str]]
     highlights: list[str]
     image_url: Optional[str] = None
+    related_topics: list[str] = field(default_factory=list)
 
 
 class WikipediaScraper:
@@ -45,6 +46,12 @@ class WikipediaScraper:
     """
 
     BASE_URL = "https://en.wikipedia.org"
+    RELATED_SECTION_TITLES = {
+        "see also",
+        "related articles",
+        "related topics",
+        "related",
+    }
 
     def __init__(self, timeout: int = 10, storage=None) -> None:
         self.timeout = timeout
@@ -180,6 +187,8 @@ class WikipediaScraper:
             if len(highlights) >= 10:
                 break
 
+        related_topics = self._extract_related_topics(content=content, topic_title=title)
+
         if not summary and not key_facts and not sections and not highlights:
             return None
 
@@ -194,6 +203,7 @@ class WikipediaScraper:
             sections=sections,
             highlights=highlights,
             image_url=image_url,
+            related_topics=related_topics,
         )
 
     def _extract_main_image(self, soup: BeautifulSoup, content: Any) -> Optional[str]:
@@ -221,3 +231,39 @@ class WikipediaScraper:
                 pass
             return _make_https(src)
         return None
+
+    def _extract_related_topics(self, content: Any, topic_title: str) -> list[str]:
+        related: list[str] = []
+        seen: set[str] = set()
+
+        for heading in content.select("div.mw-parser-output > h2, div.mw-parser-output > h3"):
+            heading_text = _clean_text(heading.get_text(" ", strip=True)).lower()
+            if heading_text not in self.RELATED_SECTION_TITLES:
+                continue
+
+            sibling = heading.find_next_sibling()
+            while sibling is not None and sibling.name not in {"h2", "h3"}:
+                if sibling.name in {"ul", "ol"}:
+                    for anchor in sibling.select("a[href^='/wiki/']"):
+                        href = anchor.get("href", "")
+                        if not href.startswith("/wiki/"):
+                            continue
+                        article_key = href.replace("/wiki/", "", 1)
+                        if ":" in article_key:
+                            continue
+
+                        name = _clean_text(anchor.get_text(" ", strip=True))
+                        if not name:
+                            continue
+
+                        normalized = name.casefold()
+                        if normalized == topic_title.casefold() or normalized in seen:
+                            continue
+
+                        seen.add(normalized)
+                        related.append(name)
+                        if len(related) >= 12:
+                            return related
+                sibling = sibling.find_next_sibling()
+
+        return related

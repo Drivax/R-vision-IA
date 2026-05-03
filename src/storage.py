@@ -85,6 +85,7 @@ class Storage:
                     key_facts_json TEXT,
                     sections_json TEXT,
                     highlights_json TEXT,
+                    related_topics_json TEXT,
                     cached_at TEXT NOT NULL
                 );
                 """
@@ -95,6 +96,7 @@ class Storage:
         new_columns = [
             ("cards", "image_url", "TEXT"),
             ("wiki_cache", "image_url", "TEXT"),
+            ("wiki_cache", "related_topics_json", "TEXT"),
         ]
         with self._connect() as conn:
             for table, column, col_type in new_columns:
@@ -562,6 +564,7 @@ class Storage:
             sections=[tuple(x) for x in json.loads(row["sections_json"] or "[]")],
             highlights=json.loads(row["highlights_json"] or "[]"),
             image_url=row["image_url"] if row["image_url"] else None,
+            related_topics=json.loads(row["related_topics_json"] or "[]"),
         )
 
     def set_wiki_cache(self, normalized_topic: str, data) -> None:
@@ -573,7 +576,7 @@ class Storage:
                 INSERT INTO wiki_cache
                     (normalized_topic, wiki_title, wiki_url, summary,
                      paragraphs_json, key_facts_json, sections_json,
-                     highlights_json, image_url, cached_at)
+                     highlights_json, related_topics_json, image_url, cached_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(normalized_topic) DO UPDATE SET
                     wiki_title = excluded.wiki_title,
@@ -583,6 +586,7 @@ class Storage:
                     key_facts_json = excluded.key_facts_json,
                     sections_json = excluded.sections_json,
                     highlights_json = excluded.highlights_json,
+                    related_topics_json = excluded.related_topics_json,
                     image_url = excluded.image_url,
                     cached_at = excluded.cached_at
                 """,
@@ -595,6 +599,7 @@ class Storage:
                     json.dumps(data.key_facts),
                     json.dumps(data.sections),
                     json.dumps(data.highlights),
+                    json.dumps(getattr(data, "related_topics", [])),
                     data.image_url,
                     now,
                 ],
