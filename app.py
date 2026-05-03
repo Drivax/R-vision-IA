@@ -119,7 +119,17 @@ def _activate_topic(storage: Storage, engine: FeedEngine, topic_name: str) -> No
     _append_event(action="topic_activated", title=topic["name"])
 
     inserted = _seed_topic_cards(topic_id=topic["id"], topic_name=topic["name"], storage=storage)
-    st.session_state.related_subjects = get_content_generator().suggest_related_subjects(topic=topic["name"], limit=6)
+
+    generator = get_content_generator()
+    if not hasattr(generator, "suggest_related_subjects"):
+        st.cache_resource.clear()
+        generator = get_content_generator()
+
+    if hasattr(generator, "suggest_related_subjects"):
+        st.session_state.related_subjects = generator.suggest_related_subjects(topic=topic["name"], limit=6)
+    else:
+        st.session_state.related_subjects = []
+
     _load_next_batch(engine=engine, topic_id=topic["id"])
 
     if inserted:
