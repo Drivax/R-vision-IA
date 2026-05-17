@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+import pytest
+
 from src.wiki_scraper import WikipediaScraper
 
 
@@ -64,3 +68,87 @@ def test_parse_topic_html_extracts_related_topics_from_see_also() -> None:
 
     assert topic is not None
     assert topic.related_topics == ["Electric vehicle", "Hybrid vehicle"]
+
+
+@pytest.mark.parametrize(
+    ("raw_src", "expected"),
+    [
+        ("//upload.wikimedia.org/image.jpg", "https://upload.wikimedia.org/image.jpg"),
+        ("/images/car.jpg", "https://en.wikipedia.org/images/car.jpg"),
+        ("https://upload.wikimedia.org/image.jpg", "https://upload.wikimedia.org/image.jpg"),
+    ],
+)
+def test_parse_topic_html_normalizes_image_url_to_https(raw_src: str, expected: str) -> None:
+    html = f"""
+    <html>
+      <body>
+        <h1 id="firstHeading">Car</h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>A car is a wheeled motor vehicle used for transportation and is one of the most common forms of personal mobility worldwide.</p>
+            <figure>
+              <img src="{raw_src}" width="600" />
+            </figure>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    scraper = WikipediaScraper()
+    topic = scraper._parse_topic_html(html=html, url="https://en.wikipedia.org/wiki/Car")  # noqa: SLF001
+
+    assert topic is not None
+    assert topic.image_url == expected
+
+
+def test_parse_topic_html_skips_tiny_icon_and_uses_next_image_candidate() -> None:
+    html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Car</h1>
+        <table class="infobox">
+          <tr>
+            <td><img src="/tiny-icon.png" width="18" /></td>
+          </tr>
+        </table>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>A car is a wheeled motor vehicle used for transportation and is one of the most common forms of personal mobility worldwide.</p>
+            <figure>
+              <img src="//upload.wikimedia.org/full-image.jpg" width="640" />
+            </figure>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    scraper = WikipediaScraper()
+    topic = scraper._parse_topic_html(html=html, url="https://en.wikipedia.org/wiki/Car")  # noqa: SLF001
+
+    assert topic is not None
+    assert topic.image_url == "https://upload.wikimedia.org/full-image.jpg"
+
+
+@dataclass
+class _FakeResponse:
+    status_code: int
+    url: str
+    text: str
+
+
+def test_fetch_and_parse_rejects_non_english_wikipedia_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+    scraper = WikipediaScraper()
+
+    def fake_get(*args, **kwargs):  # noqa: ANN002, ANN003
+        return _FakeResponse(
+            status_code=200,
+            url="https://fr.wikipedia.org/wiki/Automobile",
+            text="<html><body><h1 id='firstHeading'>Automobile</h1></body></html>",
+        )
+
+    monkeypatch.setattr("src.wiki_scraper.requests.get", fake_get)
+
+    result = scraper._fetch_and_parse("https://en.wikipedia.org/wiki/Automobile")  # noqa: SLF001
+    assert result is None
