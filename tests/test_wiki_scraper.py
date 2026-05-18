@@ -152,3 +152,60 @@ def test_fetch_and_parse_rejects_non_english_wikipedia_redirect(monkeypatch: pyt
 
     result = scraper._fetch_and_parse("https://en.wikipedia.org/wiki/Automobile")  # noqa: SLF001
     assert result is None
+
+
+def test_parse_topic_html_returns_none_when_missing_firstheading() -> None:
+    """Test graceful handling of malformed HTML with missing title element."""
+    html = """
+    <html>
+      <body>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>Some content without a title.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    scraper = WikipediaScraper()
+    topic = scraper._parse_topic_html(html=html, url="https://en.wikipedia.org/wiki/Car")  # noqa: SLF001
+
+    assert topic is None
+
+
+def test_parse_topic_html_returns_none_when_missing_content_div() -> None:
+    """Test graceful handling of malformed HTML with missing mw-content-text div."""
+    html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Car</h1>
+      </body>
+    </html>
+    """
+
+    scraper = WikipediaScraper()
+    topic = scraper._parse_topic_html(html=html, url="https://en.wikipedia.org/wiki/Car")  # noqa: SLF001
+
+    assert topic is None
+
+
+def test_parse_topic_html_returns_none_when_all_content_blocks_empty() -> None:
+    """Test graceful handling when all extractable content (paragraphs, facts, sections, highlights) is missing or insufficient."""
+    html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Car</h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>Short.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    scraper = WikipediaScraper()
+    topic = scraper._parse_topic_html(html=html, url="https://en.wikipedia.org/wiki/Car")  # noqa: SLF001
+
+    assert topic is None
