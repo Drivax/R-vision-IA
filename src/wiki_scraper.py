@@ -52,6 +52,7 @@ class WikipediaScraper:
         "related topics",
         "related",
     }
+    DISAMBIGUATION_CATEGORY = "disambiguation pages"
 
     def __init__(self, timeout: int = 10, storage=None) -> None:
         self.timeout = timeout
@@ -90,7 +91,14 @@ class WikipediaScraper:
                 return data
         return None
 
-    def _fetch_and_parse(self, url: str) -> WikiTopicData | None:
+    def _fetch_and_parse(self, url: str, visited_urls: Optional[set[str]] = None) -> WikiTopicData | None:
+        if visited_urls is None:
+            visited_urls = set()
+
+        if url in visited_urls:
+            return None
+        visited_urls.add(url)
+
         try:
             response = requests.get(
                 url,
@@ -112,7 +120,60 @@ class WikipediaScraper:
         if "en.wikipedia.org" not in final_url or "/wiki/" not in final_url:
             return None
 
+        if final_url in visited_urls and final_url != url:
+            return None
+        visited_urls.add(final_url)
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        content = soup.select_one("div#mw-content-text")
+        if content and self._is_disambiguation_page(soup=soup, content=content):
+            for candidate_url in self._extract_disambiguation_candidates(content=content):
+                data = self._fetch_and_parse(candidate_url, visited_urls=visited_urls)
+                if data:
+                    return data
+            return None
+
         return self._parse_topic_html(html=response.text, url=final_url)
+
+    def _is_disambiguation_page(self, soup: BeautifulSoup, content: Any) -> bool:
+        title_node = soup.select_one("#firstHeading")
+        title_text = ""
+        if title_node is not None:
+            title_text = _clean_text(title_node.get_text(" ", strip=True)).casefold()
+        if title_text.endswith("(disambiguation)"):
+            return True
+
+        if content.select_one("table#disambigbox, table.disambigbox, .mw-disambig") is not None:
+            return True
+
+        for category_link in soup.select("#mw-normal-catlinks a"):
+            category_text = _clean_text(category_link.get_text(" ", strip=True)).casefold()
+            if category_text == self.DISAMBIGUATION_CATEGORY:
+                return True
+
+        return False
+
+    def _extract_disambiguation_candidates(self, content: Any, limit: int = 5) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        for anchor in content.select("div.mw-parser-output > ul > li a[href^='/wiki/']"):
+            href = (anchor.get("href", "") or "").strip()
+            if not href.startswith("/wiki/"):
+                continue
+
+            article_key = href.replace("/wiki/", "", 1)
+            if not article_key or ":" in article_key:
+                continue
+
+            if href in seen:
+                continue
+            seen.add(href)
+            candidates.append(self.BASE_URL + href)
+            if len(candidates) >= max(1, limit):
+                break
+
+        return candidates
 
     def _parse_topic_html(self, html: str, url: str) -> WikiTopicData | None:
         soup = BeautifulSoup(html, "html.parser")

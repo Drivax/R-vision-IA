@@ -154,6 +154,100 @@ def test_fetch_and_parse_rejects_non_english_wikipedia_redirect(monkeypatch: pyt
     assert result is None
 
 
+def test_fetch_and_parse_follows_disambiguation_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    scraper = WikipediaScraper()
+
+    disambiguation_html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Mercury</h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <table id="disambigbox"><tr><td>This is a disambiguation page.</td></tr></table>
+            <ul>
+              <li><a href="/wiki/Mercury_(planet)">Mercury (planet)</a></li>
+              <li><a href="/wiki/Mercury_(element)">Mercury (element)</a></li>
+            </ul>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    topic_html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Mercury (planet)</h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>Mercury is the smallest planet in the Solar System and the closest to the Sun, with a heavily cratered surface and extreme temperatures.</p>
+            <h2><span class="mw-headline">Orbit</span></h2>
+            <p>Its orbit around the Sun takes about 88 Earth days and shows a high orbital eccentricity compared to other planets.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    def fake_get(url, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        if url.endswith("/wiki/Mercury"):
+            return _FakeResponse(
+                status_code=200,
+                url="https://en.wikipedia.org/wiki/Mercury",
+                text=disambiguation_html,
+            )
+        if url.endswith("/wiki/Mercury_(planet)"):
+            return _FakeResponse(
+                status_code=200,
+                url="https://en.wikipedia.org/wiki/Mercury_(planet)",
+                text=topic_html,
+            )
+        raise AssertionError(f"Unexpected URL fetched: {url}")
+
+    monkeypatch.setattr("src.wiki_scraper.requests.get", fake_get)
+
+    result = scraper._fetch_and_parse("https://en.wikipedia.org/wiki/Mercury")  # noqa: SLF001
+
+    assert result is not None
+    assert result.title == "Mercury (planet)"
+    assert result.summary.startswith("Mercury is the smallest planet")
+
+
+def test_fetch_and_parse_returns_none_when_disambiguation_has_no_valid_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scraper = WikipediaScraper()
+
+    disambiguation_html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Mercury</h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <table id="disambigbox"><tr><td>This is a disambiguation page.</td></tr></table>
+            <ul>
+              <li><a href="/wiki/Help:Contents">Help</a></li>
+              <li><a href="/wiki/File:Mercury.jpg">Image</a></li>
+            </ul>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    def fake_get(*args, **kwargs):  # noqa: ANN002, ANN003
+        return _FakeResponse(
+            status_code=200,
+            url="https://en.wikipedia.org/wiki/Mercury",
+            text=disambiguation_html,
+        )
+
+    monkeypatch.setattr("src.wiki_scraper.requests.get", fake_get)
+
+    result = scraper._fetch_and_parse("https://en.wikipedia.org/wiki/Mercury")  # noqa: SLF001
+    assert result is None
+
+
 def test_parse_topic_html_returns_none_when_missing_firstheading() -> None:
     """Test graceful handling of malformed HTML with missing title element."""
     html = """
