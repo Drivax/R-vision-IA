@@ -304,11 +304,12 @@ class WikipediaScraper:
 
             sibling = heading.find_next_sibling()
             while sibling is not None and sibling.name not in {"h2", "h3"}:
-                if sibling.name in {"ul", "ol"}:
+                if sibling.name in {"ul", "ol", "p", "div", "table"}:
                     for anchor in sibling.select("a[href^='/wiki/']"):
                         href = anchor.get("href", "")
                         if not href.startswith("/wiki/"):
                             continue
+
                         article_key = href.replace("/wiki/", "", 1)
                         if ":" in article_key:
                             continue

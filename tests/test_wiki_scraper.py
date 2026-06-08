@@ -70,6 +70,29 @@ def test_parse_topic_html_extracts_related_topics_from_see_also() -> None:
     assert topic.related_topics == ["Electric vehicle", "Hybrid vehicle"]
 
 
+def test_parse_topic_html_extracts_related_topics_from_paragraph_links() -> None:
+    html = """
+    <html>
+      <body>
+        <h1 id="firstHeading">Automobile</h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>An automobile is a wheeled motor vehicle used for transportation and daily mobility around the world.</p>
+            <h2><span class="mw-headline">See also</span></h2>
+            <p>Related topics include <a href="/wiki/Electric_vehicle">Electric vehicle</a> and <a href="/wiki/Hybrid_vehicle">Hybrid vehicle</a>.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    scraper = WikipediaScraper()
+    topic = scraper._parse_topic_html(html=html, url="https://en.wikipedia.org/wiki/Automobile")  # noqa: SLF001
+
+    assert topic is not None
+    assert topic.related_topics == ["Electric vehicle", "Hybrid vehicle"]
+
+
 @pytest.mark.parametrize(
     ("raw_src", "expected"),
     [
